@@ -408,17 +408,6 @@ def infer_manager(
     output_root=OUTPUT_DIR,
     n_zernike=10,
 ):
-    """
-    Manager-style inference function (SERIAL, SAFE).
-
-    ref_input, ab_input:
-        - folder path OR
-        - single image path
-
-    Returns:
-        List of result dictionaries
-    """
-
     zernike_modes = generate_zernike_modes(n_zernike)
 
     # -------------------------------
@@ -475,20 +464,24 @@ def infer_manager(
     # -------------------------------
     # SERIAL execution (CRITICAL)
     # -------------------------------
-    for ref_path, ab_path in frame_pairs:
+    for idx, (ref_path, ab_path) in enumerate(frame_pairs):
+        t0 = time.perf_counter()
+
+        # ---- FULL COMPUTATION ----
         res = infer_pair(
             ref_path,
             ab_path,
             output_dir=output_dir,
             zernike_modes=zernike_modes,
         )
+        t1 = time.perf_counter()
 
         if res is None:
             continue
 
         results.append(res)
 
-        # ---- Live visualization (SAFE) ----
+        # ---- LIVE VISUALIZATION ----
         if res.get("wavefront") is not None:
             wavefront_viewer.update(
                 W_vis=res["wavefront_vis"],
@@ -496,11 +489,17 @@ def infer_manager(
                 X=res["X"],
                 Y=res["Y"],
             )
+        t2 = time.perf_counter()
 
+        # ---- PRINT EVERY N FRAMES ----
+        if idx % 5 == 0:
+            print(
+                f"[Frame {idx:04d}] "
+                f"Compute: {(t1 - t0)*1000:.2f} ms | "
+                f"Render: {(t2 - t1)*1000:.2f} ms | "
+                f"Total: {(t2 - t0)*1000:.2f} ms"
+            )
     return results
-
-
-
 if __name__ == "__main__":
     import argparse
 

@@ -2,3 +2,4 @@
 __pycache__/
 outputs/
 *.keras
+git rm --cached shs-spot-detection-and-wavefront-reconstruction
