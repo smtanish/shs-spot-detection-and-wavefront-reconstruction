@@ -25,6 +25,7 @@ from multiprocessing import Pool, cpu_count
 import tensorflow as tf
 from keras import layers, models
 from keras.models import load_model
+from backend import xp, GPU_ENABLED
 from wavefront_modal import (
     normalize_centroids,
     build_design_matrix,
@@ -309,7 +310,7 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
         )
 
     # ----------------------------------
-    # Modal reconstruction
+    # Modal reconstruction (GPU / CPU)
     # ----------------------------------
     zernike_coeffs = None
     wavefront = None
@@ -327,6 +328,13 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
         zernike_coeffs = solve_modal_coefficients(A, b)
 
         X, Y, W_phys = reconstruct_wavefront(zernike_coeffs, zernike_modes)
+
+        # -------- GPU → CPU boundary (CRITICAL) --------
+        if GPU_ENABLED:
+            X = xp.asnumpy(X)
+            Y = xp.asnumpy(Y)
+            W_phys = xp.asnumpy(W_phys)
+            zernike_coeffs = xp.asnumpy(zernike_coeffs)
 
         if W_phys is not None and np.isfinite(W_phys).any():
             wavefront = W_phys
@@ -355,7 +363,7 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
         "num_matches": len(displacements_px),
         "zernike_coeffs": zernike_coeffs,
 
-        # wavefronts
+        # wavefronts (NOW GUARANTEED NUMPY)
         "wavefront": wavefront,
         "wavefront_vis": wavefront_vis,
         "X": X,
@@ -363,7 +371,6 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
 
         "output_path": output_dir
     }
-
 
 def infer_folder(ref_folder, ab_folder, output_dir):
     ref_files = sorted(
