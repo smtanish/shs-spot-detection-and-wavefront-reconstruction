@@ -36,6 +36,13 @@ from wavefront_modal import (
     plot_wavefront,
     generate_zernike_modes
 )
+import tensorflow as tf
+
+gpus = tf.config.list_physical_devices("GPU")
+if gpus:
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
 from wavefront_live import LiveWavefrontViewer
 wavefront_viewer = LiveWavefrontViewer(grid_size=200)
 
@@ -330,11 +337,12 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
         X, Y, W_phys = reconstruct_wavefront(zernike_coeffs, zernike_modes)
 
         # -------- GPU → CPU boundary (CRITICAL) --------
-        if GPU_ENABLED:
-            X = xp.asnumpy(X)
-            Y = xp.asnumpy(Y)
-            W_phys = xp.asnumpy(W_phys)
-            zernike_coeffs = xp.asnumpy(zernike_coeffs)
+        from backend import to_cpu
+        X = to_cpu(X)
+        Y = to_cpu(Y)
+        W_phys = to_cpu(W_phys)
+        zernike_coeffs = to_cpu(zernike_coeffs)
+
 
         if W_phys is not None and np.isfinite(W_phys).any():
             wavefront = W_phys
@@ -351,6 +359,10 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
 
             W_vis = np.flipud(W_vis).T
             wavefront_vis = W_vis
+            # --- HARD CPU GUARANTEE ---
+            assert isinstance(W_phys, np.ndarray)
+            assert isinstance(X, np.ndarray)
+            assert isinstance(Y, np.ndarray)
 
     # ----------------------------------
     # RETURN PURE DATA (NO UI)
@@ -490,12 +502,15 @@ def infer_manager(
 
         # ---- LIVE VISUALIZATION ----
         if res.get("wavefront") is not None:
+            from backend import to_cpu
+
             wavefront_viewer.update(
-                W_vis=res["wavefront_vis"],
-                W_phys=res["wavefront"],
-                X=res["X"],
-                Y=res["Y"],
+                W_vis=to_cpu(res["wavefront_vis"]),
+                W_phys=to_cpu(res["wavefront"]),
+               X=to_cpu(res["X"]),
+                Y=to_cpu(res["Y"]),
             )
+
         t2 = time.perf_counter()
 
         # ---- PRINT EVERY N FRAMES ----

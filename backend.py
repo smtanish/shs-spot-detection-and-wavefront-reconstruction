@@ -1,11 +1,9 @@
+# backend.py
+import numpy as np
 
+# ---- HARD CPU MODE ----
 GPU_ENABLED = False
+xp = np
 
-try:
-    import cupy as cp
-    xp = cp
-    GPU_ENABLED = True
-except Exception:
-    import numpy as np
-    xp = np
-    GPU_ENABLED = False
+def to_cpu(x):
+    return x
