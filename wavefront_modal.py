@@ -1,16 +1,4 @@
-# wavefront_modal.py
-"""
-Modal wavefront reconstruction from Shack–Hartmann slope data.
 
-Inputs:
-- Centroid positions (x, y)
-- Local slopes (dx, dy)
-
-Outputs:
-- Zernike coefficients
-- Reconstructed wavefront W(x, y)
-- 3D surface plot (Matplotlib)
-"""
 import math
 import numpy as np
 import matplotlib.pyplot as plt
@@ -109,9 +97,15 @@ def numerical_derivative(func, x, y, eps=1e-6):
     return dfdx, dfdy
 
 def zernike_derivatives(n, m, x, y):
+    x = np.asarray(x)
+    y = np.asarray(y)
+
     def Z(xi, yi):
         rho, theta = cartesian_to_polar(xi, yi)
         return zernike(n, m, rho, theta)
+
+    dZdx, dZdy = numerical_derivative(Z, x, y)
+    return dZdx, dZdy
 
     return numerical_derivative(Z, x, y)
 
@@ -146,24 +140,25 @@ def normalize_centroids(centroids):
     y_norm = y / R_px
 
     return x_norm, y_norm, R_px
-
 def build_design_matrix(x, y, modes, R_phys):
-    x = xp.asarray(x)
-    y = xp.asarray(y)
-    R_phys = xp.asarray(R_phys)
+    # Force CPU NumPy arrays
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    R_phys = float(R_phys)
 
     N = x.shape[0]
     M = len(modes)
 
-    A = xp.zeros((2 * N, M), dtype=xp.float64)
+    # Allocate design matrix
+    A = np.zeros((2 * N, M), dtype=np.float64)
 
-    for k in range(N):
-        for j, (n, m) in enumerate(modes):
-            dZdx, dZdy = zernike_derivatives(n, m, x[k], y[k])
+    # ---- VECTORIZE OVER POINTS, LOOP OVER MODES ONLY ----
+    for j, (n, m) in enumerate(modes):
+        # IMPORTANT: zernike_derivatives must accept vector x, y
+        dZdx, dZdy = zernike_derivatives(n, m, x, y)
 
-            # Physical scaling (CRITICAL)
-            A[2 * k, j]     = dZdx / R_phys
-            A[2 * k + 1, j] = dZdy / R_phys
+        A[0::2, j] = dZdx / R_phys
+        A[1::2, j] = dZdy / R_phys
 
     return A
 
