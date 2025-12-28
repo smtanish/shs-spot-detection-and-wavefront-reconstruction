@@ -188,61 +188,49 @@ def is_valid_zernike(n, m):
         (n - abs(m)) % 2 == 0
     )
 def reconstruct_wavefront(coeffs, modes, grid_size=200):
-    # -------------------------------
-    # Zernike mode validity check
-    # -------------------------------
-    def is_valid_zernike(n, m):
-        return (
-            n >= 0 and
-            abs(m) <= n and
-            (n - abs(m)) % 2 == 0
-        )
+    # ---- CPU only ----
+    coeffs = np.asarray(coeffs, dtype=np.float64)
 
-    coeffs = xp.asarray(coeffs)
-
+    # Filter valid modes
     valid = [
         (c, (n, m))
         for c, (n, m) in zip(coeffs, modes)
-        if xp.isfinite(c) and is_valid_zernike(n, m)
+        if np.isfinite(c) and is_valid_zernike(n, m)
     ]
 
     if not valid:
         raise ValueError("No valid Zernike modes passed to reconstruct_wavefront()")
 
     coeffs, modes = zip(*valid)
-    coeffs = xp.asarray(coeffs)
+    coeffs = np.asarray(coeffs, dtype=np.float64)
 
-    # -------------------------------
-    # Normalized reconstruction grid
-    # -------------------------------
-    x = xp.linspace(-1.0, 1.0, grid_size)
-    y = xp.linspace(-1.0, 1.0, grid_size)
-    X, Y = xp.meshgrid(x, y, indexing="xy")
+    M = len(coeffs)
 
-    rho = xp.sqrt(X**2 + Y**2)
-    theta = xp.arctan2(Y, X)
+    # ---- Reconstruction grid ----
+    x = np.linspace(-1.0, 1.0, grid_size)
+    y = np.linspace(-1.0, 1.0, grid_size)
+    X, Y = np.meshgrid(x, y, indexing="xy")
 
-    # -------------------------------
-    # Pupil mask
-    # -------------------------------
+    rho = np.sqrt(X**2 + Y**2)
+    theta = np.arctan2(Y, X)
     pupil = rho <= 1.0
 
-    # -------------------------------
-    # Wavefront reconstruction
-    # -------------------------------
-    W = xp.zeros_like(X, dtype=xp.float64)
+    # ---- Stack all Zernike modes ----
+    Z_stack = np.zeros((M, grid_size, grid_size), dtype=np.float64)
 
-    for c, (n, m) in zip(coeffs, modes):
-        Z = xp.zeros_like(W)
-        Z[pupil] = zernike(n, m, rho[pupil], theta[pupil])
-        W = W + c * Z
+    for j, (n, m) in enumerate(modes):
+        Zj = np.zeros_like(rho)
+        Zj[pupil] = zernike(n, m, rho[pupil], theta[pupil])
+        Z_stack[j] = Zj
 
-    # -------------------------------
-    # Mask outside pupil AFTER sum
-    # -------------------------------
-    W = xp.where(pupil, W, xp.nan)
+    # ---- Weighted sum (vectorized) ----
+    W = np.tensordot(coeffs, Z_stack, axes=(0, 0))
+
+    # Mask outside pupil
+    W[~pupil] = np.nan
 
     return X, Y, W
+
 
 def remove_piston_tilt(W, X, Y):
     W = xp.asarray(W)
