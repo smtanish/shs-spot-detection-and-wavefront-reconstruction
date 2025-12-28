@@ -1,5 +1,49 @@
+# -----------------------------
+# Python / virtual environment
+# -----------------------------
 .venv/
 __pycache__/
-outputs/
+*.pyc
+
+# -----------------------------
+# ML models & arrays
+# -----------------------------
 *.keras
-git rm --cached shs-spot-detection-and-wavefront-reconstruction
+*.h5
+*.npy
+*.npz
+
+# -----------------------------
+# Datasets (DO NOT VERSION)
+# -----------------------------
+noisyimageset/
+sipstest/
+dataset/
+data/
+
+# -----------------------------
+# Outputs / generated files
+# -----------------------------
+outputs/
+results/
+runs/
+logs/
+
+# -----------------------------
+# Images (generated / copied)
+# -----------------------------
+*.png
+*.jpg
+*.jpeg
+
+# -----------------------------
+# CUDA / installers / binaries
+# -----------------------------
+cuda_*.exe
+*.exe
+
+# -----------------------------
+# OS junk
+# -----------------------------
+.DS_Store
+Thumbs.db
