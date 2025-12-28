@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from numpy.linalg import lstsq
 from backend import xp, GPU_ENABLED
 
+_ZERNIKE_GRID_CACHE = {}
+
 try:
     from numba import njit
 except ImportError:
@@ -149,12 +151,9 @@ def build_design_matrix(x, y, modes, R_phys):
     N = x.shape[0]
     M = len(modes)
 
-    # Allocate design matrix
     A = np.zeros((2 * N, M), dtype=np.float64)
 
-    # ---- VECTORIZE OVER POINTS, LOOP OVER MODES ONLY ----
     for j, (n, m) in enumerate(modes):
-        # IMPORTANT: zernike_derivatives must accept vector x, y
         dZdx, dZdy = zernike_derivatives(n, m, x, y)
 
         A[0::2, j] = dZdx / R_phys
@@ -188,10 +187,9 @@ def is_valid_zernike(n, m):
         (n - abs(m)) % 2 == 0
     )
 def reconstruct_wavefront(coeffs, modes, grid_size=200):
-    # ---- CPU only ----
     coeffs = np.asarray(coeffs, dtype=np.float64)
 
-    # Filter valid modes
+    # ---- Filter valid modes ----
     valid = [
         (c, (n, m))
         for c, (n, m) in zip(coeffs, modes)
@@ -203,34 +201,40 @@ def reconstruct_wavefront(coeffs, modes, grid_size=200):
 
     coeffs, modes = zip(*valid)
     coeffs = np.asarray(coeffs, dtype=np.float64)
+    modes = tuple(modes)  # needed for cache key
 
     M = len(coeffs)
 
-    # ---- Reconstruction grid ----
-    x = np.linspace(-1.0, 1.0, grid_size)
-    y = np.linspace(-1.0, 1.0, grid_size)
-    X, Y = np.meshgrid(x, y, indexing="xy")
+    # ---- Cache key ----
+    cache_key = (grid_size, modes)
 
-    rho = np.sqrt(X**2 + Y**2)
-    theta = np.arctan2(Y, X)
-    pupil = rho <= 1.0
+    if cache_key in _ZERNIKE_GRID_CACHE:
+        X, Y, pupil, Z_stack = _ZERNIKE_GRID_CACHE[cache_key]
+    else:
+        # ---- Build grid ----
+        x = np.linspace(-1.0, 1.0, grid_size)
+        y = np.linspace(-1.0, 1.0, grid_size)
+        X, Y = np.meshgrid(x, y, indexing="xy")
 
-    # ---- Stack all Zernike modes ----
-    Z_stack = np.zeros((M, grid_size, grid_size), dtype=np.float64)
+        rho = np.sqrt(X**2 + Y**2)
+        theta = np.arctan2(Y, X)
+        pupil = rho <= 1.0
 
-    for j, (n, m) in enumerate(modes):
-        Zj = np.zeros_like(rho)
-        Zj[pupil] = zernike(n, m, rho[pupil], theta[pupil])
-        Z_stack[j] = Zj
+        # ---- Precompute all Zernike modes ----
+        Z_stack = np.zeros((M, grid_size, grid_size), dtype=np.float64)
 
-    # ---- Weighted sum (vectorized) ----
+        for j, (n, m) in enumerate(modes):
+            Zj = np.zeros_like(rho)
+            Zj[pupil] = zernike(n, m, rho[pupil], theta[pupil])
+            Z_stack[j] = Zj
+
+        _ZERNIKE_GRID_CACHE[cache_key] = (X, Y, pupil, Z_stack)
+
+    # ---- Weighted sum ----
     W = np.tensordot(coeffs, Z_stack, axes=(0, 0))
-
-    # Mask outside pupil
     W[~pupil] = np.nan
 
     return X, Y, W
-
 
 def remove_piston_tilt(W, X, Y):
     W = xp.asarray(W)

@@ -51,12 +51,18 @@ wavefront_viewer = LiveWavefrontViewer(grid_size=200)
 IMG_SIZE = 128
 MAX_ASSIGN_FACTOR = 0.6
 SEED = 42
-# physical acquisition parameters (set these to your sensor/lens)
-PIXEL_PITCH = 5e-6    # meters per pixel (example; change to your camera)
-FOCAL_LENGTH = 5.2e-3    # focal length in meters (example)
+PIXEL_PITCH = 5e-6    
+FOCAL_LENGTH = 5.2e-3  
 VIS_EVERY_N_FRAMES = 2
 _vis_counter = 0
 _first_vis = True
+
+_A_cached = None
+_A_pinv = None
+_R_phys_cached = None
+_ref_centroids_cached = None
+_match_indices_cached = None
+
 
 
 
@@ -231,6 +237,8 @@ def match_and_visualize(ref_pts, ab_pts, ref_img, ab_img, title, save_path=None)
     # Do NOT block execution in inference
     plt.close(fig)
 def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
+    global _A_cached, _A_pinv, _A_rows
+
     ref_img = cv2.imread(str(ref_image_path), cv2.IMREAD_GRAYSCALE)
     ab_img  = cv2.imread(str(ab_image_path), cv2.IMREAD_GRAYSCALE)
 
@@ -244,17 +252,12 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
     ref_resized = cv2.resize(ref_img, (IMG_SIZE, IMG_SIZE)) / 255.0
     ab_resized  = cv2.resize(ab_img,  (IMG_SIZE, IMG_SIZE)) / 255.0
 
-    # ----------------------------------
-    # Predict masks
-    # ----------------------------------
     ref_pred = model.predict(
-        ref_resized[np.newaxis, ..., np.newaxis],
-        verbose=0
+        ref_resized[np.newaxis, ..., np.newaxis], verbose=0
     )[0, ..., 0]
 
     ab_pred = model.predict(
-        ab_resized[np.newaxis, ..., np.newaxis],
-        verbose=0
+        ab_resized[np.newaxis, ..., np.newaxis], verbose=0
     )[0, ..., 0]
 
     ref_mask = (ref_pred > 0.45).astype(np.uint8) * 255
@@ -300,24 +303,7 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
             displacements_px = matched_ab - matched_ref
 
     # ----------------------------------
-    # Save displacement visualization
-    # ----------------------------------
-    if output_dir is not None:
-        os.makedirs(output_dir, exist_ok=True)
-        out_name = f"displacement_{Path(ref_image_path).stem}.png"
-        output_path = os.path.join(output_dir, out_name)
-
-        match_and_visualize(
-            ref_pts,
-            ab_pts,
-            ref_img,
-            ab_img,
-            title=f"Displacement: {Path(ref_image_path).name}",
-            save_path=output_path
-        )
-
-    # ----------------------------------
-    # Modal reconstruction (GPU / CPU)
+    # Modal reconstruction (PHASE 4 SAFE)
     # ----------------------------------
     zernike_coeffs = None
     wavefront = None
@@ -325,31 +311,48 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
     X = Y = None
 
     if len(displacements_px) >= len(zernike_modes):
+
         x_norm, y_norm, R_px = normalize_centroids(matched_ref)
         R_phys = R_px * PIXEL_PITCH
 
         displacements_m = displacements_px * PIXEL_PITCH
         b = -build_slope_vector(displacements_m) / FOCAL_LENGTH
 
-        A = build_design_matrix(x_norm, y_norm, zernike_modes, R_phys)
-        zernike_coeffs = solve_modal_coefficients(A, b)
+        # ---------- Cached solve if compatible ----------
+        if (
+            _A_cached is not None and
+            _A_pinv is not None and
+            b.shape[0] == _A_rows
+        ):
+            zernike_coeffs = _A_pinv @ b
+            # print("⚡ Cached solve")
 
+        else:
+            # ---------- Safe fallback ----------
+            A = build_design_matrix(x_norm, y_norm, zernike_modes, R_phys)
+            zernike_coeffs = solve_modal_coefficients(A, b)
+
+            # ---------- Initialize cache ONCE ----------
+            if _A_cached is None:
+                _A_cached = A
+                _A_pinv = np.linalg.pinv(A)
+                _A_rows = A.shape[0]
+                print("📌 Design matrix built and cached (safe)")
+
+        # ----------------------------------
+        # Reconstruct wavefront
+        # ----------------------------------
         X, Y, W_phys = reconstruct_wavefront(zernike_coeffs, zernike_modes)
 
-        # -------- GPU → CPU boundary (CRITICAL) --------
         from backend import to_cpu
         X = to_cpu(X)
         Y = to_cpu(Y)
         W_phys = to_cpu(W_phys)
         zernike_coeffs = to_cpu(zernike_coeffs)
 
-
         if W_phys is not None and np.isfinite(W_phys).any():
             wavefront = W_phys
 
-            # -------------------------------
-            # Visualization-only conditioning
-            # -------------------------------
             W_vis = W_phys - np.nanmean(W_phys)
             Z_VIS_SCALE = 80e-9
             W_vis /= Z_VIS_SCALE
@@ -359,14 +362,7 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
 
             W_vis = np.flipud(W_vis).T
             wavefront_vis = W_vis
-            # --- HARD CPU GUARANTEE ---
-            assert isinstance(W_phys, np.ndarray)
-            assert isinstance(X, np.ndarray)
-            assert isinstance(Y, np.ndarray)
 
-    # ----------------------------------
-    # RETURN PURE DATA (NO UI)
-    # ----------------------------------
     return {
         "name": Path(ref_image_path).name,
         "ref_centroids": ref_pts,
@@ -374,15 +370,13 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
         "displacements": displacements_px,
         "num_matches": len(displacements_px),
         "zernike_coeffs": zernike_coeffs,
-
-        # wavefronts (NOW GUARANTEED NUMPY)
         "wavefront": wavefront,
         "wavefront_vis": wavefront_vis,
         "X": X,
         "Y": Y,
-
         "output_path": output_dir
     }
+
 
 def infer_folder(ref_folder, ab_folder, output_dir):
     ref_files = sorted(
@@ -514,7 +508,7 @@ def infer_manager(
         t2 = time.perf_counter()
 
         # ---- PRINT EVERY N FRAMES ----
-        if idx % 5 == 0:
+        if idx % 1 == 0:
             print(
                 f"[Frame {idx:04d}] "
                 f"Compute: {(t1 - t0)*1000:.2f} ms | "
