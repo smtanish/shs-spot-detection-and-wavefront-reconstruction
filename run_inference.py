@@ -6,13 +6,13 @@ from infer_unet import OUTPUT_DIR
 
 
 
-N_ZERNIKES = 10  # change as needed
+N_ZERNIKES = 15  # change as needed
 
 
 def main():
     results = infer_manager(
-        ref_input=r"C:\Users\tanis\Desktop\unetcnnoffline\ipsphtest\IP",
-        ab_input=r"C:\Users\tanis\Desktop\unetcnnoffline\ipsphtest\IA",
+        ref_input=r"C:\Users\tanis\Desktop\unetcnnoffline\perfectspots\IP",
+        ab_input=r"C:\Users\tanis\Desktop\unetcnnoffline\perfectspots\IA",
         save_outputs=True,
         output_root=OUTPUT_DIR,
         n_zernike=N_ZERNIKES

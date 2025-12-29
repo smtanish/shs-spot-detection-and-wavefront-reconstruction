@@ -302,9 +302,6 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
             matched_ab  = ab_pts[col_ind[valid]]
             displacements_px = matched_ab - matched_ref
 
-    # ----------------------------------
-    # Modal reconstruction (PHASE 4 SAFE)
-    # ----------------------------------
     zernike_coeffs = None
     wavefront = None
     wavefront_vis = None
@@ -318,30 +315,26 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
         displacements_m = displacements_px * PIXEL_PITCH
         b = -build_slope_vector(displacements_m) / FOCAL_LENGTH
 
-        # ---------- Cached solve if compatible ----------
         if (
             _A_cached is not None and
             _A_pinv is not None and
             b.shape[0] == _A_rows
         ):
             zernike_coeffs = _A_pinv @ b
-            # print("⚡ Cached solve")
 
         else:
-            # ---------- Safe fallback ----------
+
             A = build_design_matrix(x_norm, y_norm, zernike_modes, R_phys)
             zernike_coeffs = solve_modal_coefficients(A, b)
 
-            # ---------- Initialize cache ONCE ----------
+
             if _A_cached is None:
                 _A_cached = A
                 _A_pinv = np.linalg.pinv(A)
                 _A_rows = A.shape[0]
                 print("📌 Design matrix built and cached (safe)")
 
-        # ----------------------------------
-        # Reconstruct wavefront
-        # ----------------------------------
+
         X, Y, W_phys = reconstruct_wavefront(zernike_coeffs, zernike_modes)
 
         from backend import to_cpu
