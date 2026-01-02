@@ -1,61 +1,33 @@
-import sys
-import numpy as np
-
-from infer_unet import infer_manager
-from infer_unet import OUTPUT_DIR
-
-
-
-N_ZERNIKES = 15  # change as needed
+from PyQt6 import QtWidgets, QtCore
+from infer_unet import infer_manager, OUTPUT_DIR
+from wavefront_live import LiveWavefrontViewer
+from inference_worker import InferenceWorker
 
 
 def main():
-    results = infer_manager(
-        ref_input=r"C:\Users\tanis\Desktop\unetcnnoffline\perfectspots\IP",
-        ab_input=r"C:\Users\tanis\Desktop\unetcnnoffline\perfectspots\IA",
+    app = QtWidgets.QApplication([])
+
+    viewer = LiveWavefrontViewer(grid_size=200)
+
+    thread = QtCore.QThread()
+    worker = InferenceWorker(
+        infer_manager,
+        r"C:\Users\tanis\Desktop\unetcnnoffline\actualshs\IP",
+        r"C:\Users\tanis\Desktop\unetcnnoffline\actualshs\IA",
         save_outputs=True,
         output_root=OUTPUT_DIR,
-        n_zernike=N_ZERNIKES
+        n_zernike=10,
+        emit_result=viewer.submit,
     )
 
-    if not results:
-        print("⚠️ No valid image pairs were processed.")
-        sys.exit(1)
+    worker.moveToThread(thread)
 
-    print(f"\n✅ Number of frames processed: {len(results)}")
+    thread.started.connect(worker.run)
+    worker.finished.connect(thread.quit)
 
-    # ---- Inspect structure ----
-    print("Keys per result:", results[0].keys())
+    thread.start()
 
-    # ---- QUICK CHECK: inspect first frame ----
-    first = results[0]
-
-    print("\n📌 First frame summary")
-    print("Image name:", first["name"])
-    print("Ref centroids shape:", first["ref_centroids"].shape)
-    print("Ab centroids shape:", first["ab_centroids"].shape)
-    print("Displacements shape:", first["displacements"].shape)
-    print("Number of matches:", first["num_matches"])
-
-    print("\nFirst 10 displacement vectors:")
-    print(first["displacements"][:10])
-
-    # ---- Stack all displacements across frames ----
-    all_displacements = [
-        r["displacements"] for r in results
-        if r is not None and len(r["displacements"]) > 0
-    ]
-
-    if not all_displacements:
-        print("⚠️ No displacement vectors found in any frame.")
-        sys.exit(1)
-
-    stacked = np.vstack(all_displacements)
-
-    print("\n📊 Global displacement statistics")
-    print("Total displacement vectors:", stacked.shape)
-    print("Mean displacement:", stacked.mean(axis=0))
-    print("Std displacement:", stacked.std(axis=0))
+    app.exec()
 
 
 if __name__ == "__main__":

@@ -13,10 +13,11 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 import cv2
 import time
-from PyQt6.QtCore import QEventLoop
-from PyQt6 import QtWidgets
+
 from datetime import datetime
 import numpy as np
+import matplotlib
+matplotlib.use("Agg") 
 import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.spatial.distance import cdist
@@ -42,9 +43,6 @@ gpus = tf.config.list_physical_devices("GPU")
 if gpus:
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
-
-from wavefront_live import LiveWavefrontViewer
-wavefront_viewer = LiveWavefrontViewer(grid_size=200)
 
 
 # Inference configuration
@@ -172,71 +170,166 @@ def cleanup_mask(mask):
 def match_and_visualize(ref_pts, ab_pts, ref_img, ab_img, title, save_path=None):
     """Visualize matches: 4 views — IP, IA, dot overlay, and quiver displacement."""
     fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    fig.patch.set_facecolor("white")
 
-    # Subplot 1: Reference IP
-    axs[0, 0].imshow(ref_img, cmap='gray')
-    axs[0, 0].set_title('Reference (IP)')
-    axs[0, 0].axis('off')
+    # -------------------------------
+    # Reference IP
+    # -------------------------------
+    axs[0, 0].imshow(ref_img, cmap="gray", origin="upper")
+    axs[0, 0].set_title("Reference (IP)")
+    axs[0, 0].axis("off")
 
-    # Subplot 2: Aberrated IA
-    axs[0, 1].imshow(ab_img, cmap='gray')
-    axs[0, 1].set_title('Aberrated (IA)')
-    axs[0, 1].axis('off')
+    # -------------------------------
+    # Aberrated IA
+    # -------------------------------
+    axs[0, 1].imshow(ab_img, cmap="gray", origin="upper")
+    axs[0, 1].set_title("Aberrated (IA)")
+    axs[0, 1].axis("off")
 
-    # Subplot 3: Colored dot overlay (black bg)
-    dot_canvas = np.zeros_like(ref_img)
-    axs[1, 0].imshow(dot_canvas, cmap='gray')
-    axs[1, 0].set_title('IP (green) vs IA (red)')
-    axs[1, 0].axis('off')
-    for (x, y) in ref_pts:
-        axs[1, 0].plot(x, y, 'go', markersize=3)
-    for (x, y) in ab_pts:
-        axs[1, 0].plot(x, y, 'ro', markersize=3)
+    # -------------------------------
+    # Dot overlay (CORRECT ORIENTATION + COLOR)
+    # -------------------------------
+    axs[1, 0].imshow(
+        np.zeros_like(ref_img),
+        cmap="gray",
+        origin="upper"
+    )
+    axs[1, 0].set_title("IP (green) vs IA (red)")
+    axs[1, 0].set_aspect("equal", adjustable="box")
+    axs[1, 0].axis("off")
 
-    # Subplot 4: Quiver plot
+    if len(ref_pts):
+        axs[1, 0].scatter(ref_pts[:, 0], ref_pts[:, 1], s=8, c="lime")
+    if len(ab_pts):
+        axs[1, 0].scatter(ab_pts[:, 0], ab_pts[:, 1], s=4, c="red")
+
+    # -------------------------------
+    # Quiver plot (GEOMETRY FIXED)
+    # -------------------------------
     axs[1, 1].set_title(title)
-    axs[1, 1].set_facecolor('white')
-    axs[1, 1].axis('off')
+    axs[1, 1].axis("off")
+
     h, w = ref_img.shape
     axs[1, 1].set_xlim(0, w)
-    axs[1, 1].set_ylim(h, 0)  # invert Y for image coordinates
+    axs[1, 1].set_ylim(0, h)
+    axs[1, 1].invert_yaxis()
+    axs[1, 1].set_aspect("equal", adjustable="box")
 
-    # Match points
-    if len(ref_pts) < 2 or len(ab_pts) < 2:
-        axs[1, 1].text(0.5, 0.5, "Too few points to match", ha='center', va='center', transform=axs[1, 1].transAxes)
-        print("Too few centroids to attempt matching.")
-    else:
-        # Compute max match distance
+    if len(ref_pts) >= 2 and len(ab_pts) >= 2:
         dists = cdist(ref_pts, ref_pts)
         np.fill_diagonal(dists, np.inf)
         median_spacing = np.median(np.min(dists, axis=1))
         max_dist = MAX_ASSIGN_FACTOR * median_spacing
 
-        # Hungarian assignment
         cost = cdist(ref_pts, ab_pts)
-        row_ind, col_ind = linear_sum_assignment(cost)
-        matches = [(r, c) for r, c in zip(row_ind, col_ind) if cost[r, c] <= max_dist]
+        r, c = linear_sum_assignment(cost)
+        valid = cost[r, c] <= max_dist
 
-        print(f"Relax: factor={MAX_ASSIGN_FACTOR:.1f}, thresh={max_dist:.3f}, matches={len(matches)}")
+        if np.any(valid):
+            dx = ab_pts[c[valid], 0] - ref_pts[r[valid], 0]
+            dy = ab_pts[c[valid], 1] - ref_pts[r[valid], 1]
 
-        if matches:
-            for r, c in matches:
-                x0, y0 = ref_pts[r]
-                x1, y1 = ab_pts[c]
-                dx, dy = x1 - x0, y1 - y0
-                axs[1, 1].arrow(x0, y0, dx, dy, head_width=0.0, head_length=0.0,
-                                color='black', linewidth=0.6)
-        else:
-            axs[1, 1].text(0.5, 0.5, "No matches found", ha='center', va='center', transform=axs[1, 1].transAxes)
-            print("No matches found even after relaxation – inspect centroids above.")
+            axs[1, 1].quiver(
+                ref_pts[r[valid], 0],
+                ref_pts[r[valid], 1],
+                dx,
+                dy,
+                angles="xy",
+                scale_units="xy",
+                scale=1.0,
+                color="black",
+                width=0.002,
+            )
 
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=200)
-
-    # Do NOT block execution in inference
+        fig.savefig(save_path, dpi=200, facecolor="white")
     plt.close(fig)
-def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
+def save_diagnostic_png(res, output_dir):
+    output_dir = Path(output_dir)
+    stem = res["name"]
+
+    fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+    fig.patch.set_facecolor("white")
+    fig.suptitle(f"Displacement: {stem}", fontsize=12)
+
+    # -------------------------------
+    # Reference
+    # -------------------------------
+    axs[0, 0].imshow(res["ref_img"], cmap="gray", origin="upper")
+    axs[0, 0].set_title("Reference (IP)")
+    axs[0, 0].axis("off")
+
+    # -------------------------------
+    # Aberrated
+    # -------------------------------
+    axs[0, 1].imshow(res["ab_img"], cmap="gray", origin="upper")
+    axs[0, 1].set_title("Aberrated (IA)")
+    axs[0, 1].axis("off")
+
+    # -------------------------------
+    # Dot overlay (CORRECT)
+    # -------------------------------
+    axs[1, 0].imshow(
+        np.zeros_like(res["ref_img"]),
+        cmap="gray",
+        origin="upper"
+    )
+    axs[1, 0].scatter(
+        res["ref_centroids"][:, 0],
+        res["ref_centroids"][:, 1],
+        s=8,
+        c="lime",
+    )
+    axs[1, 0].scatter(
+        res["ab_centroids"][:, 0],
+        res["ab_centroids"][:, 1],
+        s=4,
+        c="red",
+    )
+    axs[1, 0].set_title("IP (green) vs IA (red)")
+    axs[1, 0].set_aspect("equal", adjustable="box")
+    axs[1, 0].axis("off")
+
+    # -------------------------------
+    # Quiver plot (CORRECT SCALE)
+    # -------------------------------
+    axs[1, 1].set_title("Displacement Field")
+    axs[1, 1].axis("off")
+
+    h, w = res["ref_img"].shape
+    axs[1, 1].set_xlim(0, w)
+    axs[1, 1].set_ylim(0, h)
+    axs[1, 1].invert_yaxis()
+    axs[1, 1].set_aspect("equal", adjustable="box")
+
+    if len(res["displacements"]) > 0:
+        axs[1, 1].quiver(
+            res["matched_ref"][:, 0],
+            res["matched_ref"][:, 1],
+            res["displacements"][:, 0],
+            res["displacements"][:, 1],
+            angles="xy",
+            scale_units="xy",
+            scale=1.0,
+            color="black",
+            width=0.002,
+        )
+
+    fig.savefig(
+        output_dir / f"displacement_{stem}.png",
+        dpi=90,                     # ↓ big speed gain (this matters most)
+        format="png",
+        bbox_inches=None,           # 🔴 HUGE speedup vs "tight"
+        facecolor="white",
+        pil_kwargs={"compress_level": 3},  # fast PNG compression (0–9)
+    )
+
+
+
+    plt.close(fig)
+
+def infer_pair(ref_image_path, ab_image_path, zernike_modes):
     global _A_cached, _A_pinv, _A_rows
 
     ref_img = cv2.imread(str(ref_image_path), cv2.IMREAD_GRAYSCALE)
@@ -252,37 +345,23 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
     ref_resized = cv2.resize(ref_img, (IMG_SIZE, IMG_SIZE)) / 255.0
     ab_resized  = cv2.resize(ab_img,  (IMG_SIZE, IMG_SIZE)) / 255.0
 
-    ref_pred = model.predict(
-        ref_resized[np.newaxis, ..., np.newaxis], verbose=0
-    )[0, ..., 0]
+    ref_pred = model.predict(ref_resized[np.newaxis, ..., np.newaxis], verbose=0)[0, ..., 0]
+    ab_pred  = model.predict(ab_resized[np.newaxis, ..., np.newaxis], verbose=0)[0, ..., 0]
 
-    ab_pred = model.predict(
-        ab_resized[np.newaxis, ..., np.newaxis], verbose=0
-    )[0, ..., 0]
-
-    ref_mask = (ref_pred > 0.45).astype(np.uint8) * 255
-    ab_mask  = (ab_pred  > 0.45).astype(np.uint8) * 255
+    ref_mask = cleanup_mask((ref_pred > 0.45).astype(np.uint8) * 255)
+    ab_mask  = cleanup_mask((ab_pred  > 0.45).astype(np.uint8) * 255)
 
     ref_mask = cv2.resize(ref_mask, ref_img.shape[::-1], interpolation=cv2.INTER_NEAREST)
     ab_mask  = cv2.resize(ab_mask,  ab_img.shape[::-1],  interpolation=cv2.INTER_NEAREST)
 
-    ref_mask = cleanup_mask(ref_mask)
-    ab_mask  = cleanup_mask(ab_mask)
-
-    # ----------------------------------
-    # Extract centroids
-    # ----------------------------------
     ref_pts = mask_to_centroids(ref_mask)
     ab_pts  = mask_to_centroids(ab_mask)
 
-    if len(ab_pts) < 50:
-        ab_pts = mask_to_centroids(create_binary_mask_from_ip(ab_img))
     if len(ref_pts) < 50:
         ref_pts = mask_to_centroids(create_binary_mask_from_ip(ref_img))
+    if len(ab_pts) < 50:
+        ab_pts = mask_to_centroids(create_binary_mask_from_ip(ab_img))
 
-    # ----------------------------------
-    # Hungarian matching
-    # ----------------------------------
     matched_ref = np.empty((0, 2))
     matched_ab  = np.empty((0, 2))
     displacements_px = np.empty((0, 2))
@@ -290,17 +369,15 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
     if len(ref_pts) >= 2 and len(ab_pts) >= 2:
         dists = cdist(ref_pts, ref_pts)
         np.fill_diagonal(dists, np.inf)
-        median_spacing = np.median(np.min(dists, axis=1))
-        max_dist = MAX_ASSIGN_FACTOR * median_spacing
+        max_dist = MAX_ASSIGN_FACTOR * np.median(np.min(dists, axis=1))
 
         cost = cdist(ref_pts, ab_pts)
-        row_ind, col_ind = linear_sum_assignment(cost)
+        r, c = linear_sum_assignment(cost)
+        valid = cost[r, c] <= max_dist
 
-        valid = cost[row_ind, col_ind] <= max_dist
-        if np.any(valid):
-            matched_ref = ref_pts[row_ind[valid]]
-            matched_ab  = ab_pts[col_ind[valid]]
-            displacements_px = matched_ab - matched_ref
+        matched_ref = ref_pts[r[valid]]
+        matched_ab  = ab_pts[c[valid]]
+        displacements_px = matched_ab - matched_ref
 
     zernike_coeffs = None
     wavefront = None
@@ -308,25 +385,16 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
     X = Y = None
 
     if len(displacements_px) >= len(zernike_modes):
-
         x_norm, y_norm, R_px = normalize_centroids(matched_ref)
         R_phys = R_px * PIXEL_PITCH
 
-        displacements_m = displacements_px * PIXEL_PITCH
-        b = -build_slope_vector(displacements_m) / FOCAL_LENGTH
+        b = -build_slope_vector(displacements_px * PIXEL_PITCH) / FOCAL_LENGTH
 
-        if (
-            _A_cached is not None and
-            _A_pinv is not None and
-            b.shape[0] == _A_rows
-        ):
+        if _A_cached is not None and b.shape[0] == _A_rows:
             zernike_coeffs = _A_pinv @ b
-
         else:
-
             A = build_design_matrix(x_norm, y_norm, zernike_modes, R_phys)
             zernike_coeffs = solve_modal_coefficients(A, b)
-
 
             if _A_cached is None:
                 _A_cached = A
@@ -334,40 +402,31 @@ def infer_pair(ref_image_path, ab_image_path, output_dir, zernike_modes):
                 _A_rows = A.shape[0]
                 print("📌 Design matrix built and cached (safe)")
 
-
         X, Y, W_phys = reconstruct_wavefront(zernike_coeffs, zernike_modes)
 
         from backend import to_cpu
-        X = to_cpu(X)
-        Y = to_cpu(Y)
-        W_phys = to_cpu(W_phys)
-        zernike_coeffs = to_cpu(zernike_coeffs)
+        X, Y, W_phys, zernike_coeffs = map(to_cpu, (X, Y, W_phys, zernike_coeffs))
 
-        if W_phys is not None and np.isfinite(W_phys).any():
+        if np.isfinite(W_phys).any():
             wavefront = W_phys
-
-            W_vis = W_phys - np.nanmean(W_phys)
-            Z_VIS_SCALE = 80e-9
-            W_vis /= Z_VIS_SCALE
-
-            pupil_mask = (X**2 + Y**2) <= 1.0
-            W_vis[~pupil_mask] = 0.0
-
-            W_vis = np.flipud(W_vis).T
-            wavefront_vis = W_vis
+            W_vis = (W_phys - np.nanmean(W_phys)) / 80e-9
+            W_vis[(X**2 + Y**2) > 1.0] = 0.0
+            wavefront_vis = np.flipud(W_vis).T
 
     return {
-        "name": Path(ref_image_path).name,
+        "name": Path(ref_image_path).stem,
+        "ref_img": ref_img,
+        "ab_img": ab_img,
         "ref_centroids": ref_pts,
         "ab_centroids": ab_pts,
+        "matched_ref": matched_ref,
+        "matched_ab": matched_ab,
         "displacements": displacements_px,
-        "num_matches": len(displacements_px),
         "zernike_coeffs": zernike_coeffs,
         "wavefront": wavefront,
         "wavefront_vis": wavefront_vis,
         "X": X,
         "Y": Y,
-        "output_path": output_dir
     }
 
 
@@ -407,30 +466,33 @@ def infer_folder(ref_folder, ab_folder, output_dir):
 
         infer_pair(ref_path, ab_path, output_dir)
 
-def infer_manager(
-    ref_input,
-    ab_input,
-    save_outputs=True,
-    output_root=OUTPUT_DIR,
-    n_zernike=10,
-):
-    zernike_modes = generate_zernike_modes(n_zernike)
+def save_inference_outputs(res, output_dir, frame_index):
+    """
+    Centralized saving for inference outputs.
+    """
+    output_dir = Path(output_dir)
 
-    # -------------------------------
-    # Output directory
-    # -------------------------------
-    if save_outputs:
-        if output_root is None:
-            raise ValueError("output_root must be provided when save_outputs=True")
-        output_dir = make_timestamped_output_dir(output_root)
-    else:
-        output_dir = None
+    # Wavefront plot
+    if "wavefront_fig" in res:
+        res["wavefront_fig"].savefig(
+            output_dir / f"wavefront_{frame_index:04d}.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
 
-    results = []
+    # Displacement plot
+    if "displacement_fig" in res:
+        res["displacement_fig"].savefig(
+            output_dir / f"displacement_{frame_index:04d}.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
 
-    # -------------------------------
-    # Build frame pairs
-    # -------------------------------
+    # Optional raw arrays
+    if "wavefront" in res:
+        np.save(output_dir / f"wavefront_{frame_index:04d}.npy", res["wavefront"])
+def discover_pairs(ref_input, ab_input):
+    """Discover matching (IP, IA) frame pairs."""
     frame_pairs = []
 
     if os.path.isdir(ref_input) and os.path.isdir(ab_input):
@@ -461,54 +523,40 @@ def infer_manager(
     else:
         raise ValueError("ref_input and ab_input must both be files or folders")
 
-    if not frame_pairs:
-        print("⚠️ No valid frame pairs found.")
-        return []
+    return frame_pairs
+def infer_manager(
+    ref_input,
+    ab_input,
+    save_outputs=True,
+    output_root=OUTPUT_DIR,
+    n_zernike=10,
+    emit_result=None,
+):
+    zernike_modes = generate_zernike_modes(n_zernike)
 
+    output_dir = make_timestamped_output_dir(output_root) if save_outputs else None
+
+    frame_pairs = discover_pairs(ref_input, ab_input)
     print(f"▶ Processing {len(frame_pairs)} frame pairs (serial)")
 
-    # -------------------------------
-    # SERIAL execution (CRITICAL)
-    # -------------------------------
     for idx, (ref_path, ab_path) in enumerate(frame_pairs):
         t0 = time.perf_counter()
 
-        # ---- FULL COMPUTATION ----
-        res = infer_pair(
-            ref_path,
-            ab_path,
-            output_dir=output_dir,
-            zernike_modes=zernike_modes,
-        )
-        t1 = time.perf_counter()
-
+        res = infer_pair(ref_path, ab_path, zernike_modes)
         if res is None:
             continue
 
-        results.append(res)
+        # 🔴 LIVE UPDATE — MUST COME FIRST
+        if emit_result is not None:
+            emit_result(res)
 
-        # ---- LIVE VISUALIZATION ----
-        if res.get("wavefront") is not None:
-            from backend import to_cpu
+        if save_outputs:
+            save_diagnostic_png(res, output_dir)
 
-            wavefront_viewer.update(
-                W_vis=to_cpu(res["wavefront_vis"]),
-                W_phys=to_cpu(res["wavefront"]),
-               X=to_cpu(res["X"]),
-                Y=to_cpu(res["Y"]),
-            )
 
-        t2 = time.perf_counter()
 
-        # ---- PRINT EVERY N FRAMES ----
-        if idx % 1 == 0:
-            print(
-                f"[Frame {idx:04d}] "
-                f"Compute: {(t1 - t0)*1000:.2f} ms | "
-                f"Render: {(t2 - t1)*1000:.2f} ms | "
-                f"Total: {(t2 - t0)*1000:.2f} ms"
-            )
-    return results
+        print(f"[Frame {idx:04d}] Compute: {(time.perf_counter() - t0)*1000:.2f} ms")
+
 if __name__ == "__main__":
     import argparse
 
