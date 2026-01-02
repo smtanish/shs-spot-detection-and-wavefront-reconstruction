@@ -13,6 +13,9 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 import cv2
 import time
+from queue import Queue
+
+diagnostic_queue = Queue(maxsize=8)
 
 from datetime import datetime
 import numpy as np
@@ -551,9 +554,10 @@ def infer_manager(
             emit_result(res)
 
         if save_outputs:
-            save_diagnostic_png(res, output_dir)
-
-
+            try:
+                diagnostic_queue.put_nowait((res, output_dir))
+            except Exception:
+                pass  # queue full → drop diagnostic
 
         print(f"[Frame {idx:04d}] Compute: {(time.perf_counter() - t0)*1000:.2f} ms")
 
