@@ -327,12 +327,11 @@ def save_diagnostic_png(res, output_dir):
         )
     # Save the diagnostic image with settings optimized for speed
     fig.savefig(
-        output_dir / f"displacement_{stem}.png",
+        output_dir / f"displacement_{stem}.jpg",
         dpi=90,
-        format="png",
+        format="jpg",
         bbox_inches=None,
         facecolor="white",
-        pil_kwargs={"compress_level": 3},
     )
     plt.close(fig)
 
