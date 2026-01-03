@@ -43,8 +43,8 @@ def main():
 
     worker = InferenceWorker(
         infer_manager,
-        r"C:\Users\tanis\Desktop\unetcnnoffline\actualshs\IP",
-        r"C:\Users\tanis\Desktop\unetcnnoffline\actualshs\IA",
+        r"C:\Users\tanis\Desktop\unetcnnoffline\perfectspots\IP",
+        r"C:\Users\tanis\Desktop\unetcnnoffline\perfectspots\IA",
         save_outputs=True,
         output_root=OUTPUT_DIR,
         n_zernike=10,
