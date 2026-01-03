@@ -69,6 +69,8 @@ _A_pinv = None
 _R_phys_cached = None
 _ref_centroids_cached = None
 _match_indices_cached = None
+_match_shape_cached = None  # (n_ref, n_ab)
+
 
 # Set fixed seeds so results stay consistent across runs
 tf.random.set_seed(SEED)
@@ -375,14 +377,31 @@ def infer_pair(ref_image_path, ab_image_path, zernike_modes):
         np.fill_diagonal(dists, np.inf)
         max_dist = MAX_ASSIGN_FACTOR * np.median(np.min(dists, axis=1))
         # Compute all pairwise distances and solve one-to-one matching
+        global _match_indices_cached, _match_shape_cached
+
+        # Compute cost matrix
         cost = cdist(ref_pts, ab_pts)
-        r, c = linear_sum_assignment(cost)
-        valid = cost[r, c] <= max_dist
-        # Keep only physically reasonable matches
+        shape = cost.shape  # (n_ref, n_ab)
+
+        # Decide whether cache is still valid
+        if (
+            _match_indices_cached is None
+            or _match_shape_cached != shape
+        ):
+            r, c = linear_sum_assignment(cost)
+            _match_indices_cached = (r, c)
+            _match_shape_cached = shape
+            print("📌 Spot matching cached")
+        else:
+            r, c = _match_indices_cached
+
+        # Apply physical distance cutoff SAFELY
+        valid = (r < shape[0]) & (c < shape[1]) & (cost[r, c] <= max_dist)
+
         matched_ref = ref_pts[r[valid]]
         matched_ab  = ab_pts[c[valid]]
-        # Compute pixel displacements for matched spots
         displacements_px = matched_ab - matched_ref
+
     zernike_coeffs = None
     wavefront = None
     wavefront_vis = None
